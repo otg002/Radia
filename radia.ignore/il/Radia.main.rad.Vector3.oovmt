@@ -1,0 +1,24 @@
+type object "Vector3" 3 #
+
+method "Vector3" 3 {
+	load 0 ref
+	set 0
+	load 1 ref
+	set 1
+	load 2 ref
+	set 2
+	this
+	ret
+}
+
+method "X" 0 {
+	get 0
+	ret
+}
+
+method "X:" 1 {
+	load 0 ref
+	set 0
+	ret
+}
+

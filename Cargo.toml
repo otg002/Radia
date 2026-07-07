@@ -1,0 +1,7 @@
+[package]
+name = "Radia"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oovm = { version = "0.1.0", path = "../oovm" }

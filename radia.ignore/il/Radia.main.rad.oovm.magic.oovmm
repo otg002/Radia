@@ -1,0 +1,21 @@
+mod object "<>" 0 #
+
+method "main" 0 {
+	lstr "this is x"
+	mint 2
+	mint 3
+	new "Vector3"
+	send "Vector3"
+	local 0
+	load 0 ref
+	send "X"
+	send "Println"
+	lstr "this is a different x"
+	load 0 ref
+	send "X:"
+	load 0 ref
+	send "X"
+	send "Println"
+	ret
+}
+

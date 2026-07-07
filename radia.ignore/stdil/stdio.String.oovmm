@@ -1,0 +1,7 @@
+mod bytes "String" 0 #
+
+method "Println" 0 {
+	this echo
+	lstr "\0a"
+	echo
+}

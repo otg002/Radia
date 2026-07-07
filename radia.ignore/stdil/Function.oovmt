@@ -1,0 +1,23 @@
+type object "Function" 3 #
+
+method "Function" 3 {
+	load 0 ref
+	set 0
+	load 1 ref
+	set 1
+	load 2 ref
+	set 2
+	this
+	ret
+}
+
+method "Call" 1 {
+	get 2
+	explode
+	load 0
+	explode
+	get 0
+	get 1
+	send.dyn
+	ret
+}
