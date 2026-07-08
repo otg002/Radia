@@ -61,7 +61,7 @@ pub fn compile_program(ast: FlatTree<AToken>, file: String) -> Result<Vec<(Strin
         )));
     };
     {
-        let program = std::fs::read_to_string("radia.ignore/stdlib/core/prelude.rad").map_err(Error::IOError)?;
+        let program = crate::PRELUDE.to_string();
         let ast: FlatTree<parse::AToken> = parse::parse(program)?;
         compile_special(ast, String::from("prelude.rad"), &mut info)?;
     }

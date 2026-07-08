@@ -19,6 +19,8 @@ fn make_files(files: Vec<String>) -> Result<Vec<String>> {
 pub mod parse;
 pub mod compile;
 
+pub const PRELUDE: &str = include_str!( "../radia.ignore/stdlib/core/prelude.rad");
+
 impl ToString for Error {
     fn to_string(&self) -> String {
         match self {
