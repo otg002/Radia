@@ -12,6 +12,7 @@ method "Function" 3 {
 }
 
 method "Call" 1 {
+	this ref
 	get 2
 	explode
 	load 0

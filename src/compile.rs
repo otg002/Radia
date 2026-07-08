@@ -241,13 +241,13 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             Ok(format!("\tload {local} ref\n"))
         }
         AKind::Let(ident) => {
-            let local = info.scope.len() as u32;
-            info.scope.insert(ident.clone(), local);
             let val = compile(ast.children.get(0).ok_or(Error::CompileError(
                 ast.data.line,
                 info.file.clone(),
                 format!("Keyword `let` missing value")
             ))?.clone(), info)?;
+            let local = info.scope.len() as u32;
+            info.scope.insert(ident.clone(), local);
             Ok(format!("{val}\tlocal {local}\n"))
         }
         AKind::Number(num) => {
@@ -281,8 +281,9 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             reserve(&ast, info, &mut reservations);
             let old_scope = info.scope.clone();
             info.scope = HashMap::new();
+            info.scope.insert(String::from("f"), 0);
             for (i, reservation) in reservations.iter().enumerate() {
-                info.scope.insert(reservation.clone(), i as u32);
+                info.scope.insert(reservation.clone(), i as u32 + 1);
             }
             for arg in args {
                 info.scope.insert(arg.clone(), info.scope.len() as u32);
@@ -292,11 +293,11 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             let lambda_name = format!("{} @ {} $ {lambda}", info.file, info.message);
             let mut output = format!("\tthis ref\n\tlstr \"{lambda_name}\"\n");
             for reservation in reservations.iter() {
-                output.push_str(format!("\tload {}\n", old_scope[reservation]).as_str());
+                output.push_str(format!("\tload {} ref\n", old_scope[reservation]).as_str());
             }
             output.push_str(format!("\tmarr {}\n", reservations.len()).as_str());
             output.push_str("\tnew \"Function\"\n\tsend \"Function\"\n");
-            let mut lambda: String = format!("method \"{lambda_name}\" {} {{\n", reservations.len() + args.len());
+            let mut lambda: String = format!("method \"{lambda_name}\" {} {{\n", reservations.len() + args.len() + 1);
             for child in ast.children {
                 lambda.push_str(compile(child, info)?.as_str());
             }
@@ -357,7 +358,9 @@ fn reserve(ast: &FlatTree<AToken>, info: &mut Info, reservations: &mut Vec<Strin
     match ast.data.token {
         AKind::Identifier(ref ident) => {
             if info.scope.contains_key(ident) {
-                reservations.push(ident.clone());
+                if !reservations.contains(&ident) {
+                    reservations.push(ident.clone());
+                }
             }
         }
         _ => {

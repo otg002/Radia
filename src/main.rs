@@ -13,7 +13,7 @@ pub enum Error {
 type Result<T> = std::result::Result<T, Error>;
 
 fn make_files(files: Vec<String>) -> Result<Vec<String>> {
-    oovm::make(files, "radia.ignore/il", "radia.ignore/bin").map_err(Error::OovmError)
+    oovm::make(files, "radia.ignore/il/", "radia.ignore/bin/").map_err(Error::OovmError)
 }
 
 pub mod parse;

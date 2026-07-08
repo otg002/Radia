@@ -1,1 +1,34 @@
-def if "$0\tunless #else'$label$1\tgoto #done'$label\nelse'$label:\n$2done'$label:\n"
+def if "$0\tunless #else'$label\n$1\tgoto #done'$label\nelse'$label:\n$2done'$label:\n"
+
+def Eq.Mem "$0$1\tmem-equal\n"
+
+def Input "\tinput\n"
+def Echo "$0\techo\n"
+
+impl Print for String {
+	<Echo self>;
+}
+
+def Append "$0$1\tappend\n"
+impl Append value for Array {
+	<Append self value>
+}
+impl Map op for Array {
+	let res ();
+	let iter \i {
+		[res Append [op Call ([self Get i])]];
+		let i <Add.Int i 1>;
+		<if <Ls.Int i [self Length]> [f Call (i)] {}>
+	};
+	[iter Call (0)];
+	yield res;
+}
+
+impl Foreach op for Array {
+	let iter \i {
+		[op Call ([self Get i])];
+		let i <Add.Int i 1>;
+		<if <Ls.Int i [self Length]> [f Call (i)] {}>
+	};
+	[iter Call (0)];
+}
