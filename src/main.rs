@@ -5,7 +5,7 @@ use crate::parse::FlatTree;
 #[derive(Debug)]
 pub enum Error {
     OovmError(oovm::Error),
-    ParseError(usize, String),
+    ParseError(usize, String, String),
     IOError(std::io::Error),
     CompileError(usize, String, String),
     NotImplemented(String),
@@ -25,7 +25,7 @@ impl ToString for Error {
     fn to_string(&self) -> String {
         match self {
             Error::OovmError(_) => format!("OOVM Error"),
-            Error::ParseError(line, msg) => format!("Parse error at line {line}: {msg}"),
+            Error::ParseError(line, filename, msg) => format!("Parse error at line {line} of {filename}: {msg}"),
             Error::IOError(error) => format!("IO error: {error}"),
             Error::CompileError(line, filename, msg) => format!("Compile error at line {line} of {filename}: {msg}"),
             Error::NotImplemented(feature) => format!("{feature} Not Implemented"),
@@ -35,7 +35,7 @@ impl ToString for Error {
 
 fn main() -> Result<()> {
     let program = std::fs::read_to_string("main.rad").map_err(Error::IOError)?;
-    let ast: Result<FlatTree<parse::AToken>> = parse::parse(program);
+    let ast: Result<FlatTree<parse::AToken>> = parse::parse(program, String::from("main.rad"));
     if ast.is_err() {
         let err = ast.unwrap_err();
         println!("{}", err.to_string());
@@ -60,6 +60,7 @@ fn main() -> Result<()> {
         String::from("radia.ignore/stdbin/stdio.String.0.mod"),
     ];
     paths.extend(dependencies);
+    println!("Compilation finished.");
     let exit_code = oovm::exec(paths, 0).map_err(Error::OovmError)?;
     println!("exit code {}", exit_code);
     Ok(())

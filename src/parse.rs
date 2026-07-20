@@ -8,6 +8,11 @@ pub struct Token {
     token: TokenKind,
     line: usize,
 }
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} : {:?}", self.line, self.token)
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Root,
@@ -36,6 +41,9 @@ pub enum TokenKind {
     New,
     Unit,
     Self_,
+    Namespace,
+    Import,
+    Include,
 }
 
 fn token_to_kind(token: &str) -> TokenKind {
@@ -59,17 +67,26 @@ fn token_to_kind(token: &str) -> TokenKind {
         "def" => TokenKind::Define,
         "lambda" => TokenKind::Lambda,
         "λ" => TokenKind::Lambda,
-        "func" => TokenKind::Lambda,
-        "fn" => TokenKind::Lambda,
-        "function" => TokenKind::Lambda,
         "\\" => TokenKind::Lambda,
         "new" => TokenKind::New,
         "unit" => TokenKind::Unit,
         "self" => TokenKind::Self_,
+        "namespace" => TokenKind::Namespace,
+        "import" => TokenKind::Import,
+        "include" => TokenKind::Include,
         _ => {
             match token.chars().next().expect("Unexpected empty token") {
                 '0'..='9' => TokenKind::Number(token.to_string()),
-                '\'' => TokenKind::Character(token.chars().collect::<Vec<char>>()[1]),
+                '`' => TokenKind::Character(
+                    token
+                        .replace("\\n","\n")
+                        .replace("\\t","\t")
+                        .replace("\\r","\r")
+                        .replace("\\`","`")
+                        .replace("\\\\","\\")
+                        .chars()
+                        .collect::<Vec<char>>()[1]
+                ),
                 '"' => TokenKind::String(token.strip_prefix("\"").unwrap().strip_suffix("\"").unwrap().to_string()),
                 _ => TokenKind::Identifier(token.to_string()),
             }
@@ -83,6 +100,8 @@ fn tokenize(program: String) -> Vec<Token> {
     let mut word: String = String::new();
     let mut comment: bool = false;
     let mut str: bool = false;
+    let mut escaped = false;
+    let mut character: bool = false;
     use std::collections::HashSet;
     let mut ops = HashSet::new(); {
         ops.insert('\\');
@@ -107,7 +126,30 @@ fn tokenize(program: String) -> Vec<Token> {
         }
         else if str {
             if char == '"' {
-                str = false;
+                if escaped {
+                    word.pop();
+                    word.push(char);
+                }
+                else {
+                    str = false;
+                    word.push(char);
+                    tokens.push(Token { token: token_to_kind(word.as_str()), line });
+                    word.clear();
+                }
+                escaped = false;
+            }
+            else if char == '\\' {
+                escaped = !escaped;
+                word.push(char);
+            }
+            else {
+                word.push(char);
+                escaped = false;
+            }
+        }
+        else if character {
+            if char == '`' {
+                character = false;
                 word.push(char);
                 tokens.push(Token {token: token_to_kind(word.as_str()), line});
                 word.clear();
@@ -142,6 +184,13 @@ fn tokenize(program: String) -> Vec<Token> {
                 tokens.push(Token {token: token_to_kind(word.as_str()), line});
             }
             word = String::from("\"");
+        }
+        else if char == '`' {
+            character = true;
+            if !word.is_empty() {
+                tokens.push(Token {token: token_to_kind(word.as_str()), line});
+            }
+            word = String::from("`");
         }
         else {
             word.push(char);
@@ -207,12 +256,12 @@ impl<T: Display> Display for FlatTree<T> {
     }
 }
 
-fn parse_concrete(tokens: Vec<Token>) -> Result<FlatTree<Token>> {
+fn parse_concrete(tokens: Vec<Token>, path: String) -> Result<FlatTree<Token>> {
     let mut current: Tree = MutTree::root();
     for token in tokens {
         match token.token {
             TokenKind::Root => {
-                return Err(Error::ParseError(token.line, String::from(
+                return Err(Error::ParseError(token.line, path.clone(), String::from(
                     "Unexpected `Root` token found in program. Likely an internal error."
                 )))
             }
@@ -227,6 +276,9 @@ fn parse_concrete(tokens: Vec<Token>) -> Result<FlatTree<Token>> {
             | TokenKind::List
             | TokenKind::Operation
             | TokenKind::Define
+            | TokenKind::Namespace
+            | TokenKind::Import
+            | TokenKind::Include
             | TokenKind::Lambda => {
                 let next = MutTree::new(token, Some(current.clone()));
                 current.borrow_mut().add_child(next.clone());
@@ -246,36 +298,52 @@ fn parse_concrete(tokens: Vec<Token>) -> Result<FlatTree<Token>> {
                 if let TokenKind::Define = current.clone().borrow().data.token {
                     if current.borrow().children.len() >= 2 {
                         let parent = current.borrow().parent.clone().ok_or(
-                            Error::ParseError(line, String::from("Internal error: `def` block escaped root."))
+                            Error::ParseError(line, path.clone(), String::from("Internal error: `def` block escaped root."))
                         )?;
                         current = parent;
                     }
                 }
             }
             TokenKind::Semicolon => {
-                while current.borrow().data.token != TokenKind::Block {
-                    let parent = current.borrow().parent.clone().ok_or(Error::ParseError(token.line, String::from("Unexpected semicolon")))?;
+                while current.borrow().data.token != TokenKind::Block && current.borrow().data.token != TokenKind::Root {
+                    let parent = current.borrow().parent.clone().ok_or(Error::ParseError(token.line, path.clone(), String::from("Unexpected semicolon")))?;
                     current = parent;
                 }
             }
             TokenKind::EndBlock => {
                 while current.borrow().data.token != TokenKind::Block {
-                    let parent = current.borrow().parent.clone().ok_or(Error::ParseError(token.line, String::from("Unmatched `}` or `end` symbol.")))?;
+                    let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
+                        token.line,
+                        path.clone(),
+                        String::from("Unmatched `}` or `end` symbol.")
+                    ))?;
                     current = parent;
                 }
-                let parent = current.borrow().parent.clone().ok_or(Error::ParseError(token.line, String::from("Unmatched `}` or `end` symbol.")))?;
+                let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
+                    token.line,
+                    path.clone(),
+                    String::from("Unmatched `}` or `end` symbol.")
+                ))?;
                 current = parent;
                 match current.clone().borrow().data.token {
                     TokenKind::Implement | TokenKind::Type => {
-                        let parent = current.borrow().parent.clone().ok_or(Error::ParseError(token.line, String::from(
-                            "Internal Error: `impl` or `type` block escaped root."
-                        )))?;
+                        let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
+                            token.line,
+                            path.clone(),
+                            String::from(
+                                "Internal Error: `impl` or `type` block escaped root."
+                            )
+                        ))?;
                         current = parent;
                     }
                     TokenKind::Lambda => {
-                        let parent = current.borrow().parent.clone().ok_or(Error::ParseError(token.line, String::from(
-                            "Internal Error: `lambda` block escaped root."
-                        )))?;
+                        let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
+                            token.line,
+                            path.clone(),
+                            String::from(
+                                "Internal Error: `lambda` block escaped root."
+                            )
+                        ))?;
                         current = parent;
                     }
                     _ => ()
@@ -285,11 +353,13 @@ fn parse_concrete(tokens: Vec<Token>) -> Result<FlatTree<Token>> {
                 while current.borrow().data.token != TokenKind::Message {
                     let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
                         token.line,
+                        path.clone(),
                         String::from("Unmatched `]` or `end` symbol.")))?;
                     current = parent;
                 }
                 let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
                     token.line,
+                    path.clone(),
                     String::from("Unmatched `]` symbol.")))?;
                 current = parent;
             }
@@ -297,11 +367,13 @@ fn parse_concrete(tokens: Vec<Token>) -> Result<FlatTree<Token>> {
                 while current.borrow().data.token != TokenKind::List {
                     let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
                         token.line,
+                        path.clone(),
                         String::from("Unmatched `)` symbol.")))?;
                     current = parent;
                 }
                 let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
                     token.line,
+                    path.clone(),
                     String::from("Unmatched `)` symbol.")))?;
                 current = parent;
             }
@@ -309,11 +381,13 @@ fn parse_concrete(tokens: Vec<Token>) -> Result<FlatTree<Token>> {
                 while current.borrow().data.token != TokenKind::Operation {
                     let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
                         token.line,
+                        path.clone(),
                         String::from("Unmatched `>` symbol.")))?;
                     current = parent;
                 }
                 let parent = current.borrow().parent.clone().ok_or(Error::ParseError(
                     token.line,
+                    path.clone(),
                     String::from("Unmatched `>` symbol.")))?;
                 current = parent;
             }
@@ -363,19 +437,22 @@ pub enum AbstractKind {
     New,
     Self_,
     Unit,
+    Namespace(String),
+    Import(String),
+    Include(String),
 }
 pub type AKind = AbstractKind;
 
-fn parse_abstract(cst: &FlatTree<Token>) -> Result<FlatTree<AbstractToken>> {
+fn parse_abstract(cst: &FlatTree<Token>, path: String) -> Result<FlatTree<AbstractToken>> {
     match cst.data.token.clone() {
         TokenKind::Number(number) => {
             if number.contains(".") {
                 Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Number(number.parse().map_err(
-                    |_| Error::ParseError(cst.data.line, String::from("Failed to parse float.")))?
+                    |_| Error::ParseError(cst.data.line, path, String::from("Failed to parse float.")))?
                 )), Vec::new()))
             } else {
                 Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Integer(number.parse().map_err(
-                    |_| Error::ParseError(cst.data.line, String::from("Failed to parse integer.")))?
+                    |_| Error::ParseError(cst.data.line, path, String::from("Failed to parse integer.")))?
                 )), Vec::new()))
             }
         }
@@ -388,34 +465,34 @@ fn parse_abstract(cst: &FlatTree<Token>) -> Result<FlatTree<AbstractToken>> {
         TokenKind::Message => Ok(FlatTree::new(
             AToken::new(cst.data.line, AKind::Message),
             cst.children.iter().map(
-                |child| parse_abstract(child)
+                |child| parse_abstract(child, path.clone())
             ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?)),
         TokenKind::Block => Ok(FlatTree::new(
             AToken::new(cst.data.line, AKind::Block),
             cst.children.iter().map(
-                |child| parse_abstract(child)
+                |child| parse_abstract(child, path.clone())
             ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?)),
         TokenKind::List => Ok(FlatTree::new(
             AToken::new(cst.data.line, AKind::List),
             cst.children.iter().map(
-                |child| parse_abstract(child)
+                |child| parse_abstract(child, path.clone())
             ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?)),
         TokenKind::Operation => Ok(FlatTree::new(
             AToken::new(cst.data.line, AKind::Expansion),
             cst.children.iter().map(
-                |child| parse_abstract(child)
+                |child| parse_abstract(child, path.clone())
             ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?)),
         TokenKind::Semicolon | TokenKind::EndBlock | TokenKind::EndMessage | TokenKind::EndList | TokenKind::EndOperation => Err(
-            Error::ParseError(cst.data.line, String::from(
+            Error::ParseError(cst.data.line, path, String::from(
                 "Unexpected token. This is likely an internal error with the compiler.\
                 Tokens internally reffered to as `Semicolon`, `EndList`, `EndBlock`, `EndOperation`, or `EndMessage`\
                 have snuck through the cracks and made it to the wrong stage of parsing."))),
-        TokenKind::For => Err(Error::ParseError(cst.data.line, String::from("Unexpected keyword `for`."))),
+        TokenKind::For => Err(Error::ParseError(cst.data.line, path, String::from("Unexpected keyword `for`."))),
         TokenKind::Implement => {
             let (TokenKind::Identifier(ref name) | TokenKind::String(ref name)) = cst.children.get(0).ok_or(
-                Error::ParseError(cst.data.line, String::from("Expected identifier or string after keyword `impl`."))
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier or string after keyword `impl`."))
             )?.data.token else {
-                return Err(Error::ParseError(cst.data.line, String::from("Expected identifier or string after keyword `impl`.")))
+                return Err(Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier or string after keyword `impl`.")))
             };
             let mut args: Vec<String> = Vec::new();
             let mut taking_args: bool = true;
@@ -427,7 +504,7 @@ fn parse_abstract(cst: &FlatTree<Token>) -> Result<FlatTree<AbstractToken>> {
                     continue;
                 }
                 let (TokenKind::Identifier(ref arg) | TokenKind::String(ref arg)) = child.data.token else {
-                    return Err(Error::ParseError(cst.data.line, String::from(
+                    return Err(Error::ParseError(cst.data.line, path.clone(), String::from(
                         "Expected identifier, string, or `for` keyword in impl-definition in the form of a parameter or type name."
                     )));
                 };
@@ -441,7 +518,7 @@ fn parse_abstract(cst: &FlatTree<Token>) -> Result<FlatTree<AbstractToken>> {
             }
             let mut children: Vec<FlatTree<AbstractToken>> = Vec::new();
             for child in cst.children[pivot..].iter() {
-                children.push(parse_abstract(child)?);
+                children.push(parse_abstract(child, path.clone())?);
             }
             Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Implement(name.clone(), args, impl_type)), children))
         }
@@ -449,72 +526,72 @@ fn parse_abstract(cst: &FlatTree<Token>) -> Result<FlatTree<AbstractToken>> {
             let mut args: Vec<String> = Vec::new();
             for child in cst.children[..cst.children.len() - 1].iter() {
                 let (TokenKind::Identifier(ref arg) | TokenKind::String(ref arg)) = child.data.token else {
-                    return Err(Error::ParseError(cst.data.line, String::from(
+                    return Err(Error::ParseError(cst.data.line, path, String::from(
                         "Expected identifier or string after lambda definition (`λ`, `lambda`, `fn`, `func`, `function`, or `\\` keywords/operators) in the form of a parameter, the same as an `impl` parameter definition."
                     )));
                 };
                 args.push(arg.clone());
             }
-            let body = parse_abstract(cst.children.last().ok_or(Error::ParseError(cst.data.line, String::from(
+            let body = parse_abstract(cst.children.last().ok_or(Error::ParseError(cst.data.line, path.clone(), String::from(
                 "Unexpected lambda with no implementation or arguments"
-            )))?)?;
+            )))?, path)?;
             Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Lambda(args)), vec![body]))
         }
         TokenKind::Root => Ok(FlatTree::new(
             AToken::new(cst.data.line, AKind::Root),
             cst.children.iter().map(
-                |child| parse_abstract(child)
+                |child| parse_abstract(child, path.clone())
             ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?)),
         TokenKind::Yield => Ok(FlatTree::new(
             AToken::new(cst.data.line, AKind::Yield),
             cst.children.iter().map(
-                |child| parse_abstract(child)
+                |child| parse_abstract(child, path.clone())
             ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?)),
         TokenKind::Get => {
             let TokenKind::Identifier(ref name) = cst.children.get(0).ok_or(
-                Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `get`."))
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `get`."))
             )?.data.token else {
-                return Err(Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `get`.")))
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `get`.")))
             };
             Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Get(name.clone())), Vec::new()))
         }
         TokenKind::Set => {
             let TokenKind::Identifier(ref name) = cst.children.get(0).ok_or(
-                Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `set`."))
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `set`."))
             )?.data.token else {
-                return Err(Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `set`.")))
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `set`.")))
             };
             Ok(FlatTree::new(
                 AToken::new(cst.data.line, AKind::Set(name.clone())),
                 cst.children[1..].iter().map(
-                    |child| parse_abstract(child)
+                    |child| parse_abstract(child, path.clone())
                 ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?))
         }
         TokenKind::Let => {
             let TokenKind::Identifier(ref name) = cst.children.get(0).ok_or(
-                Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `let`."))
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `let`."))
             )?.data.token else {
-                return Err(Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `let`.")))
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `let`.")))
             };
             Ok(FlatTree::new(
                 AToken::new(cst.data.line, AKind::Let(name.clone())),
                 cst.children[1..].iter().map(
-                    |child| parse_abstract(child)
+                    |child| parse_abstract(child, path.clone())
                 ).collect::<Result<Vec<FlatTree<AbstractToken>>>>()?))
         }
         TokenKind::Type => {
             let TokenKind::Identifier(ref name) = cst.children.get(0).ok_or(
-                Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `type`."))
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `type`."))
             )?.data.token else {
-                return Err(Error::ParseError(cst.data.line, String::from("Expected identifier after keyword `type`.")))
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `type`.")))
             };
             let block = cst.children.get(1).ok_or(
-                Error::ParseError(cst.data.line, String::from("Expected block after keyword `type`"))
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected block after keyword `type`"))
             )?;
             let mut fields: Vec<String> = Vec::new();
             for child in block.children.iter() {
                 let TokenKind::Identifier(ref name) = child.data.token else {
-                    return Err(Error::ParseError(cst.data.line, String::from("Invalid field name.")))
+                    return Err(Error::ParseError(cst.data.line, path, String::from("Invalid field name.")))
                 };
                 fields.push(name.clone());
             }
@@ -523,31 +600,60 @@ fn parse_abstract(cst: &FlatTree<Token>) -> Result<FlatTree<AbstractToken>> {
         TokenKind::Define => {
             let (TokenKind::Identifier(ref name) | TokenKind::String(ref name)) = cst.children.get(0).ok_or(Error::ParseError(
                 cst.data.line,
+                path.clone(),
                 String::from("`def` block missing identifier or string as expansion name")
             ))?.data.token else {
                 return Err(Error::ParseError(
                     cst.data.line,
+                    path.clone(),
                     String::from("`def` block missing identifier or string as expansion name")
                 ));
             };
             let (TokenKind::Identifier(ref exp) | TokenKind::String(ref exp)) = cst.children.get(1).ok_or(Error::ParseError(
                 cst.data.line,
+                path.clone(),
                 String::from("`def` block missing identifier or string as expansion value after expansion name")
             ))?.data.token else {
                 return Err(Error::ParseError(
                     cst.data.line,
+                    path,
                     String::from("`def` block missing identifier or string as expansion value after expansion name")
                 ));
             };
             let exp: String = exp.clone().replace("\\n", "\n").replace("\\t", "\t");
             return Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Define(name.clone(), exp)), Vec::new()));
         }
+        TokenKind::Namespace => {
+            let (TokenKind::Identifier(ref name) | TokenKind::String(ref name)) = cst.children.get(0).ok_or(
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `namespace`."))
+            )?.data.token else {
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `get`.")))
+            };
+            Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Namespace(name.clone())), Vec::new()))
+        }
+        TokenKind::Import => {
+            let (TokenKind::Identifier(ref name) | TokenKind::String(ref name)) = cst.children.get(0).ok_or(
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `import`."))
+            )?.data.token else {
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `get`.")))
+            };
+            Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Import(name.clone())), Vec::new()))
+        }
+        TokenKind::Include => {
+            let (TokenKind::Identifier(ref name) | TokenKind::String(ref name)) = cst.children.get(0).ok_or(
+                Error::ParseError(cst.data.line, path.clone(), String::from("Expected identifier after keyword `include`."))
+            )?.data.token else {
+                return Err(Error::ParseError(cst.data.line, path, String::from("Expected identifier after keyword `get`.")))
+            };
+            Ok(FlatTree::new(AToken::new(cst.data.line, AKind::Include(name.clone())), Vec::new()))
+        }
     }
 }
 
-pub fn parse(program: String) -> Result<FlatTree<AToken>> {
+pub fn parse(program: String, path: String) -> Result<FlatTree<AToken>> {
     let tokens = tokenize(program);
-    let cst = parse_concrete(tokens)?;
-    let ast = parse_abstract(&cst)?;
+    let cst = parse_concrete(tokens, path.clone())?;
+    // println!("{}", cst);
+    let ast = parse_abstract(&cst, path)?;
     Ok(ast)
 }

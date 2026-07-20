@@ -1,0 +1,71 @@
+namespace chain_map;
+
+type ChainMapNode {
+	key
+	data
+	next
+	is_end
+}
+
+impl ChainMapNode key data for ChainMapNode {
+	set is_end 1;
+	set data data;
+	set key key;
+	yield self;
+}
+impl Insert node for ChainMapNode {
+	<if {get is_end} {
+		set is_end 0;
+		set next node;
+	}{
+		[{get next} Insert node]
+	}>
+}
+impl Get key for ChainMapNode {
+	<if <Eq key {get key}> {
+		yield {get data};
+	} {
+		<if {get is_end} {
+			<Panic "KeyError on ChainMap\n">
+		} {
+			yield [{get next} Get key];
+		}>
+	}>
+}
+impl Contains key for ChainMapNode {
+	<if <Eq key {get key}> <true>
+		<if {get is_end}
+			<false>
+			[{get next} Contains key]
+		>
+	>
+}
+
+type ChainMap {
+	first
+	is_empty
+}
+
+impl ChainMap for ChainMap {
+	set is_empty 1;
+	yield self;
+}
+impl Insert key value for ChainMap {
+	let node [new ChainMapNode key value];
+	<if {get is_empty} {
+		set first node;
+		set is_empty 0;
+	} {
+		[{get first} Insert node];
+	}>
+}
+impl Get key for ChainMap {
+	<if {get is_empty} {
+		<Panic "`Get` Sent to empty ChainMap\n">
+	} {
+		yield [{get first} Get key];
+	}>
+}
+impl Contains key for ChainMap {
+	<if {get is_empty} <false> [{get first} Contains key]>
+}

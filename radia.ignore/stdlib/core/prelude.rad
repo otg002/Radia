@@ -1,34 +1,142 @@
+namespace radia;
+
+def Add.Int "$0$1\tadd.int\n"
+def Sub.Int "$0$1\tsub.int\n"
+def Mul.Int "$0$1\tmul.int\n"
+def Div.Int "$0$1\tdiv.int\n"
+def Rem.Int "$0$1\trem.int\n"
+
+def Add.Float "$0$1\tadd.float\n"
+def Sub.Float "$0$1\tsub.float\n"
+def Mul.Float "$0$1\tmul.float\n"
+def Div.Float "$0$1\tdiv.float\n"
+def Rem.Float "$0$1\trem.float\n"
+
+def Less.Int "$0$1\tless.int\n"
+def Greater.Int "$0$1\tmore.int\n"
+def LessEq.Int "$0$1\tdupn 2\n\tless.int\n\trev 3\n\tequal\n\tor\n"
+def GreaterEq.Int "$0$1\tdupn 2\n\tmore.int\n\trev 3\n\tequal\n\tor\n"
+
+def Less.Float "$0$1\tless.float\n"
+def Greater.Float "$0$1\tmore.float\n"
+def LessEq.Float "$0$1\tdupn 2\n\tless.float\n\trev 3\n\tequal\n\tor\n"
+def GreaterEq.Float "$0$1\tdupn 2\n\tmore.float\n\trev 3\n\tequal\n\tor\n"
+
+def Eq "$0$1\tequal\n"
+def = "$0$1\tequal\n"
+def Neq "$0$1\tequal\n\tnot.bool\n"
+def ~= "$0$1\tequal\n\tnot.bool\n"
+
+def And "$0$1\tand\n"
+def & "$0$1\tand\n"
+def Or "$0$1\tor\n"
+def | "$0$1\tor\n"
+def Not "$0\tnot.bool\n"
+def ~ "$0$1\tnot.bool\n"
+def Not.Bitwise "$0$1\tnot\n"
+def ~~ "$0$1\tnot\n"
+def Xor "$0$1\txor\n"
+def ^ "$0$1\txor\n"
+
+type Box { value }
+type Some { value }
+type None {}
+
+def true "\tmint 1\n"
+def false "\tmint 0\n"
+
+def TypeOf "$0\ttypeof\n"
+
 def if "$0\tunless #else'$label\n$1\tgoto #done'$label\nelse'$label:\n$2done'$label:\n"
+def unless "$0\tnot.bool\n\tunless #done'$label\n$1done'$label:\n"
 
 def Eq.Mem "$0$1\tmem-equal\n"
+def Panic "$0\techo\n\texit\n"
 
 def Input "\tinput\n"
 def Echo "$0\techo\n"
+def ReadFile "$0\trfile\n"
 
-impl Print for String {
+impl Print for "String" {
 	<Echo self>;
 }
 
 def Append "$0$1\tappend\n"
-impl Append value for Array {
+impl Append value for "Array" {
 	<Append self value>
 }
-impl Map op for Array {
+
+def label'0 "std.label'0:\n"
+def goto'0 "\tgoto #std.label'0\n"
+def unless'0 "$0\tunless #std.label'0\n"
+def if'0 "$0\tnot\n\tunless #std.label'0\n"
+
+def label'1 "std.label'1:\n"
+def goto'1 "\tgoto #std.label'1\n"
+def unless'1 "$0\tunless #std.label'1\n"
+def if'1 "$0\tnot\n\tunless #std.label'1\n"
+
+impl Map op for "Array" {
 	let res ();
-	let iter \i {
-		[res Append [op Call ([self Get i])]];
-		let i <Add.Int i 1>;
-		<if <Ls.Int i [self Length]> [f Call (i)] {}>
-	};
-	[iter Call (0)];
-	yield res;
+	let i [new Box 0];
+	<label'0>;
+	<unless'1 <Less.Int [i Get] [self Length]>>;
+	let current [self Get [i Get]];
+	[i Set <Add.Int [i Get] 1>];
+	[res Append [op Call (current)]];
+	<goto'0>;
+	<label'1>;
+	res
 }
 
-impl Foreach op for Array {
-	let iter \i {
-		[op Call ([self Get i])];
-		let i <Add.Int i 1>;
-		<if <Ls.Int i [self Length]> [f Call (i)] {}>
-	};
-	[iter Call (0)];
+impl Foreach op for "Array" {
+	let i [new Box 0];
+	<label'0>;
+	<unless'1 <Less.Int [i Get] [self Length]>>;
+	let current [self Get [i Get]];
+	[i Set <Add.Int [i Get] 1>];
+	[op Call (current)];
+	<goto'0>;
+	<label'1>;
 }
+
+def Chars "$0\tchars\n"
+impl Chars for String {
+	<Chars self>
+}
+impl Equals str for String {
+	<Eq.Mem str self>
+}
+
+impl None for None { yield self; }
+impl Unwrap for None {
+	<Panic "Unwrap failed.\n">
+}
+impl Expect msg for None {
+	<Panic msg>
+}
+impl Some data for Some {
+	set value data;
+	yield self;
+}
+impl Unwrap for Some {
+	yield {get value};
+}
+impl Expect _ for Some {
+	yield {get value};
+}
+
+impl Box value for Box {
+	set value value;
+	yield self;
+}
+impl Get for Box {
+	yield {get value};
+}
+impl Set val for Box {
+	set value val;
+}
+
+def ArrToString "$0\tmstr\n"
+def while "loop'$label:\n$0\tunless #end'$label\n$1\tgoto #loop'$label\nend'$label:\n"
+def until "loop'$label:\n$0\tnot.bool\n\tunless #end'$label\n$1\tgoto #loop'$label\nend'$label:\n"

@@ -9,49 +9,31 @@ struct Info {
     message: String,
     lambdas: usize,
     types: HashMap<String, HashMap<String, u32>>,
+    aliases: HashMap<String, String>,
     implementations: HashMap<String, Vec<String>>,
     expansions: HashMap<String, String>,
     labels: usize,
+    namespace: String,
+    imports: Vec<String>,
+    locals: u32,
 }
 
 pub fn compile_program(ast: FlatTree<AToken>, file: String) -> Result<Vec<(String, String)>> {
     let mut info: Info = Info {
         scope: HashMap::new(),
-        file: file.clone(),
+        file: String::from("prelude.rad"),
         class: String::new(),
         message: String::new(),
         lambdas: 0,
         types: HashMap::new(),
+        aliases: HashMap::new(),
         implementations: HashMap::new(),
         expansions: HashMap::new(),
         labels: 0,
+        namespace: String::new(),
+        imports: Vec::new(),
+        locals: 0,
     };
-    {
-        info.expansions.insert(String::from("Add.Int"), String::from("$0$1\tadd.int\n"));
-        info.expansions.insert(String::from("Sub.Int"), String::from("$0$1\tsub.int\n"));
-        info.expansions.insert(String::from("Mul.Int"), String::from("$0$1\tmul.int\n"));
-        info.expansions.insert(String::from("Div.Int"), String::from("$0$1\tdiv.int\n"));
-        info.expansions.insert(String::from("Rem.Int"), String::from("$0$1\trem.int\n"));
-        info.expansions.insert(String::from("Add.Float"), String::from("$0$1\tadd.float\n"));
-        info.expansions.insert(String::from("Sub.Float"), String::from("$0$1\tsub.float\n"));
-        info.expansions.insert(String::from("Mul.Float"), String::from("$0$1\tmul.float\n"));
-        info.expansions.insert(String::from("Div.Float"), String::from("$0$1\tdiv.float\n"));
-        info.expansions.insert(String::from("Rem.Float"), String::from("$0$1\trem.float\n"));
-        info.expansions.insert(String::from("Ls.Int"), String::from("$0$1\tless.int\n"));
-        info.expansions.insert(String::from("Gt.Int"), String::from("$0$1\tmore.int\n"));
-        info.expansions.insert(String::from("Le.Int"), String::from("$0$1\tdupn 2\n\tless.int\n\trev 3\n\tequal\n\tor\n"));
-        info.expansions.insert(String::from("Ge.Int"), String::from("$0$1\tdupn 2\n\tmore.int\n\trev 3\n\tequal\n\tor\n"));
-        info.expansions.insert(String::from("Ls.Float"), String::from("$0$1\tless.float\n"));
-        info.expansions.insert(String::from("Gt.Float"), String::from("$0$1\tmore.float\n"));
-        info.expansions.insert(String::from("Le.Float"), String::from("$0$1\tdupn 2\n\tless.float\n\trev 3\n\tequal\n\tor\n"));
-        info.expansions.insert(String::from("Ge.Float"), String::from("$0$1\tdupn 2\n\tmore.float\n\trev 3\n\tequal\n\tor\n"));
-        info.expansions.insert(String::from("Eq"), String::from("$0$1\tequal\n"));
-        info.expansions.insert(String::from("Neq"), String::from("$0$1\tequal not\n"));
-        info.expansions.insert(String::from("And"), String::from("$0$1\tand\n"));
-        info.expansions.insert(String::from("Or"), String::from("$0$1\tor\n"));
-        info.expansions.insert(String::from("Not"), String::from("$0\tnot\n"));
-        info.expansions.insert(String::from("Xor"), String::from("$0$1\txor\n"));
-    }
     let FlatTree { children, data: AToken { token: AKind::Root, .. } } = ast else {
         return Err(Error::CompileError(0, file, String::from(
             "Root missing for abstract syntax tree (Internal Error). \
@@ -62,9 +44,10 @@ pub fn compile_program(ast: FlatTree<AToken>, file: String) -> Result<Vec<(Strin
     };
     {
         let program = crate::PRELUDE.to_string();
-        let ast: FlatTree<parse::AToken> = parse::parse(program)?;
+        let ast: FlatTree<parse::AToken> = parse::parse(program, String::from("prelude.rad"))?;
         compile_special(ast, String::from("prelude.rad"), &mut info)?;
     }
+    info.file = file.clone();
     for child in children {
         compile_top(child, &mut info)?;
     }
@@ -74,7 +57,12 @@ pub fn compile_program(ast: FlatTree<AToken>, file: String) -> Result<Vec<(Strin
         let mut contents: String = String::new();
         let path: String;
         if native {
-            contents.push_str(format!("type object \"{type_name}\" {} #\n\n", info.types[&type_name].len()).as_str());
+            contents.push_str(
+                format!(
+                    "type object \"{type_name}\" {} #\n\n",
+                    info.types[&type_name].len()
+                ).as_str()
+            );
             path = format!("Radia.{file}.{type_name}.oovmt");
         } else {
             contents.push_str(format!("mod object \"{type_name}\" 0 #\n\n").as_str());
@@ -84,7 +72,12 @@ pub fn compile_program(ast: FlatTree<AToken>, file: String) -> Result<Vec<(Strin
             contents.push_str(implementation.as_str());
             contents.push('\n');
         }
-        files.push((path.replace("<", ".oovm.").replace(">", ".magic.").replace("..","."), contents));
+        files.push((path
+                        .replace("<", ".oovm.")
+                        .replace(">", ".magic.")
+                        .replace("::", ".ns.")
+                        .replace("..",".")
+                    , contents));
     }
     Ok(files)
 }
@@ -110,17 +103,23 @@ fn compile_top(ast: FlatTree<AToken>, info: &mut Info) -> Result<()> {
             for (i, field) in fields.into_iter().enumerate() {
                 fields_map.insert(field, i as u32);
             }
-            info.types.insert(name, fields_map);
+            info.aliases.insert(name.clone(), format!("{}::{name}", info.namespace));
+            info.types.insert(format!("{}::{name}", info.namespace), fields_map);
         }
-        AKind::Implement(msg, args, type_name) => {
+        AKind::Implement(msg, args, mut type_name) => {
+            if info.aliases.contains_key(&type_name) {
+                type_name = info.aliases[&type_name].clone();
+            }
             let mut output: String = format!("method \"{msg}\" {} {{\n", args.len());
             info.lambdas = 0;
             info.message = msg.clone();
             info.scope = HashMap::new();
             info.class = type_name.clone();
             info.labels = 0;
+            info.locals = 0;
             for (i, arg) in args.into_iter().enumerate() {
                 info.scope.insert(arg, i as u32);
+                info.locals += 1;
             }
             let children: Vec<FlatTree<AToken>>;
             let first = ast.children.get(0).ok_or(Error::CompileError(
@@ -144,10 +143,24 @@ fn compile_top(ast: FlatTree<AToken>, info: &mut Info) -> Result<()> {
         AKind::Define(name, expansion) => {
             info.expansions.insert(name, expansion);
         }
+        AKind::Namespace(name) => {
+            info.namespace = name;
+        }
+        AKind::Include(path) => {
+            let namespace = info.namespace.clone();
+            let program = std::fs::read_to_string(path).map_err(Error::IOError)?;
+            let ast: FlatTree<parse::AToken> = parse::parse(program, info.file.clone())?;
+            compile_special(ast, String::from("prelude.rad"), info)?;
+            info.namespace = namespace;
+        }
         token_kind => return Err(Error::CompileError(
             ast.data.line,
             info.file.clone(),
-            format!("Only `impl` blocks and `type` definitions may be top-level: {:?}", token_kind)
+            format!(
+                "Only `impl` blocks, expansion definitions (`def` statements), \
+                `namespace` declarations, and `type` definitions may be top-level: {:?}",
+                token_kind
+            )
         )),
     }
     Ok(())
@@ -204,7 +217,10 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             let obj = ast.children.get(0).ok_or(Error::CompileError(
                 ast.data.line,
                 info.file.clone(),
-                format!("Empty message send not allowed (lists are defined with `(a b c)`, not `[a b c]`)")
+                format!(
+                    "Empty message send not allowed \
+                    (lists are defined with `(a b c)`, not `[a b c]`)"
+                )
             ))?.clone();
             let msg: String;
             match ast.children.get(1).ok_or(Error::CompileError(
@@ -219,11 +235,14 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
                 _ => return Err(Error::CompileError(
                     ast.data.line,
                     info.file.clone(),
-                    format!("Invalid message (must be in form of string literal or identifier literal).")
+                    format!(
+                        "Invalid message (must be in form of string literal or identifier literal)."
+                    )
                 ))
             }
             if let AKind::New = obj.data.token {
-                Ok(format!("{output}\tnew \"{msg}\"\n\tsend \"{msg}\"\n"))
+                let obj_type = info.aliases.get(&msg).unwrap_or(&msg);
+                Ok(format!("{output}\tnew \"{obj_type}\"\n\tsend \"{msg}\"\n"))
             }
             else {
                 let obj = compile(obj, info)?;
@@ -246,7 +265,8 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
                 info.file.clone(),
                 format!("Keyword `let` missing value")
             ))?.clone(), info)?;
-            let local = info.scope.len() as u32;
+            let local = info.locals;
+            info.locals += 1;
             info.scope.insert(ident.clone(), local);
             Ok(format!("{val}\tlocal {local}\n"))
         }
@@ -255,6 +275,9 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
         }
         AKind::Integer(num) => {
             Ok(format!("\tmint {num:?}\n"))
+        }
+        AKind::Character(char) => {
+            Ok(format!("\tmint {}\n", char as u32))
         }
         AKind::List => {
             let mut output: String = String::new();
@@ -265,7 +288,11 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             Ok(format!("{output}\tmarr {}\n", len))
         }
         AKind::String(str) => {
-            Ok(format!("\tlstr \"{}\"\n", str.replace("\\n", "\\0a")))
+            Ok(format!("\tlstr \"{}\"\n", str
+                .replace("\\n", "\\0a")
+                .replace("\\t", "\\09")
+                .replace("\\\\", "\\5c")
+            ))
         }
         AKind::Block => {
             let mut output: String = String::new();
@@ -288,6 +315,7 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             for arg in args {
                 info.scope.insert(arg.clone(), info.scope.len() as u32);
             }
+            info.locals = info.scope.len() as u32;
             let lambda = info.lambdas;
             info.lambdas += 1;
             let lambda_name = format!("{} @ {} $ {lambda}", info.file, info.message);
@@ -297,34 +325,48 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
             }
             output.push_str(format!("\tmarr {}\n", reservations.len()).as_str());
             output.push_str("\tnew \"Function\"\n\tsend \"Function\"\n");
-            let mut lambda: String = format!("method \"{lambda_name}\" {} {{\n", reservations.len() + args.len() + 1);
+            let mut lambda: String = format!(
+                "method \"{lambda_name}\" {} {{\n",
+                reservations.len() + args.len() + 1
+            );
             for child in ast.children {
                 lambda.push_str(compile(child, info)?.as_str());
             }
             lambda.push_str("\tret\n}\n");
-            let mut implementations = info.implementations.get(&info.class).unwrap_or(&Vec::new()).clone();
+            let mut implementations = info
+                .implementations
+                .get(&info.class)
+                .unwrap_or(&Vec::new())
+                .clone();
             implementations.push(lambda);
             info.implementations.insert(info.class.clone(), implementations);
             info.scope = old_scope;
             Ok(output)
         }
         AKind::Expansion => {
-            let (AKind::Identifier(ref name) | AKind::String(ref name)) = ast.children.get(0).ok_or(Error::CompileError(
-                ast.data.line,
-                info.file.clone(),
-                format!(
-                    "Empty angled brackets are disallowed. \
-                    For the type `<>` of `unit`, use \"<>\" with the double quotes included. \
-                    A correct example of angled brackets would be: `<Add.Int 3 5>`, \
-                    which would add the integers three and five."
-                )
-            ))?.data.token else {
+            let (AKind::Identifier(ref name) | AKind::String(ref name)) = ast
+                .children
+                .get(0)
+                .ok_or(Error::CompileError(
+                    ast.data.line,
+                    info.file.clone(),
+                    format!(
+                        "Empty angled brackets are disallowed. \
+                        For the type `<>` of `unit`, use \"<>\" with the double quotes included. \
+                        A correct example of angled brackets would be: `<Add.Int 3 5>`, \
+                        which would add the integers three and five."
+                    )
+                ))?
+                .data
+                .token
+            else {
                 return Err(Error::CompileError(
                     ast.data.line,
                     info.file.clone(),
                     format!(
                         "Invalid expansion name. \
-                        Correct expansion syntax is of the form: `<expansion-name arg1 arg2 argN>` or `<\"quoted expansion name\" arg1 arg2 argN>`"
+                        Correct expansion syntax is of the form: `<expansion-name arg1 arg2 argN>` \
+                        or `<\"quoted expansion name\" arg1 arg2 argN>`"
                     )
                 ));
             };
@@ -333,7 +375,8 @@ fn compile(ast: FlatTree<AToken>, info: &mut Info) -> Result<String> {
                 info.file.clone(),
                 format!(
                     "Unknown expansion `{name}`. \
-                    If this is unexpected, make sure the intended expansion is defined *before* being used."
+                    If this is unexpected, make sure the \
+                    intended expansion is defined *before* being used."
                 )
             ))?.clone();
             if expansion.contains("$label") {
